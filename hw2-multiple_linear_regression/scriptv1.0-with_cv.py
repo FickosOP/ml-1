@@ -1,5 +1,7 @@
 from scipy.stats import zscore
 from numpy.linalg import inv
+# from category_encoders import TargetEncoder
+# from sklearn.ensemble import IsolationForest
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -9,34 +11,78 @@ import sys
 def load_train_set(path):
     df = pd.read_csv(path, sep=",", index_col=False)
 
-    df['zvanje'].replace(['Prof', 'AsstProf', 'AssocProf'], [3, 1, 2], inplace=True)
-    df['oblast'].replace(['A', 'B'], [1, 2], inplace=True)
-    df['pol'].replace(['Female', 'Male'], [0, 1], inplace=True)
-    df.insert(len(df.columns), 'y_sqrt', np.sqrt(df.iloc[:, -1]))
+    pd.set_option('display.max_columns', None)
 
-    df['zvanje_z'] = zscore(df['zvanje'])
-    df['oblast_x'] = zscore(df['oblast'])
-    # df['pol_z'] = df['pol']
+    df.insert(len(df.columns), 'y_sqrt', np.sqrt(df.iloc[:, -1]))  # try box_cox
+
+    df['pol_bin'] = df['pol'].replace(['Female', 'Male'], [0, 1])
+    df['oblast_bin'] = df['oblast'].replace(['A', 'B'], [0, 1])
+
+    # encoder = TargetEncoder()
+    # df[['pol_te', 'oblast_te', 'zvanje_te']] = encoder.fit_transform(df[['pol', 'oblast', 'zvanje']], df['y_sqrt'])
+
+    stats = df['y_sqrt'].groupby(df['zvanje']).agg(['count', 'mean'])
+    smoothing_factor = 1.0
+    min_samples_leaf = 1
+    prior = df['y_sqrt'].mean()
+    smoove = 1 / (1 + np.exp(-(stats['count'] - min_samples_leaf) / smoothing_factor))
+    smoothing = prior * (1 - smoove) + stats['mean'] * smoove
+    encoded = pd.Series(smoothing, name='zvanje_te')
+
+    df['zvanje_te'] = df['zvanje'].replace(['AssocProf', 'AsstProf', 'Prof'], encoded)
+
+    df['zvanje_z'] = zscore(df['zvanje_te'])
+    df = df.drop(['zvanje_te'], axis=1)
+
     df['godina_doktor_z'] = zscore(df['godina_doktor'])
     df['godina_iskustva_z'] = zscore(df['godina_iskustva'])
-    # print(df)
 
     x = df.iloc[:, 7:].values
     y = df.iloc[:, 6].values
 
-    df.hist(grid=False, figsize=(10, 6), bins=30)
+    # df.hist(grid=False, figsize=(10, 6), bins=30)
     # plt.show()
+
+    # remove outliers
+    # if_sk = IsolationForest(n_estimators=50, max_samples='auto', contamination=float(0.01))
+    # if_sk.fit(x)
+    df['anomaly'] = detect_outliers(df.iloc[:, :6])  # if_sk.predict(x)
+
+    # print(df[df.anomaly == -1])
+
+    df = df[df.anomaly != -1]  # UKLANJANJE AUTLAJERA IZ DATAFREJMA
+    df = df.drop(['anomaly'], axis=1)
+
+    # print(df)
+    x = df.iloc[:, 7:].values
+    y = df.iloc[:, 6].values
+    # print(f"NAKON BRISANJA AUTLAJERA OSTALO JE: {len(df)}")
 
     # print(df.agg(['skew', 'kurtosis']).transpose())
     # print(df)
+    # wait = input()
     return np.array(x, dtype=np.float64), np.array(y, dtype=np.float64)
 
 
+def detect_outliers(df):
+    arr = []
+    for index, row in df.iterrows():
+        if row['zvanje'] == 'Prof':
+            if row['plata'] > 200000 or row['plata'] < 75000:
+                arr.append(-1)
+            else:
+                arr.append(1)
+        elif row['zvanje'] == 'AssocProf':
+            if row['plata'] > 120000:
+                arr.append(-1)
+            else:
+                arr.append(1)
+        else:
+            arr.append(1)
+    return arr
+
+
 def load_test_set(path):
-    return 0
-
-
-def cost_function(theta, x, y):
     return 0
 
 
@@ -59,19 +105,9 @@ def ridge_regression(x, y, learning_rate=0.1, max_iterations=1000, stopping_thre
     diag_matrix = np.array(diag_matrix, dtype=np.float64)
     # Closed form
     theta = inv((x.T.dot(x) + l2_penalty * diag_matrix)).dot(x.T.dot(y))
-    print("THETA")
-    print(theta)
+    # print("THETA")
+    # print(theta)
     return theta
-    # for _ in range(max_iterations):
-    #     # print(_)
-    #     predicted = np.dot(x, theta)
-    #     theta = theta - (1/n)*learning_rate*(x.T.dot(predicted - y)) + l2_penalty/2 * theta.T.dot(theta)
-    #
-    #     if np.isnan(theta[0]):
-    #         print(_)
-    #         break
-    #
-    # return theta
 
 
 def fit(x, y):
@@ -91,9 +127,6 @@ def calculate_rmse(predicted, true):
 
 def create_new_sets(x_parts, y_parts, i):
     new_x, new_y, new_x_val, new_y_true = [], [], [], []
-    print(f"LenX = {len(x_parts)}")
-    print(f"LenY = {len(y_parts)}")
-    # print(y_parts)
     for j in range(len(x_parts)):
         if j == i:
             for row in x_parts[j]:
@@ -107,7 +140,6 @@ def create_new_sets(x_parts, y_parts, i):
             for row in y_parts[j]:
                 new_y.append(row.tolist())
 
-    # print(new_x)
     return np.array(new_x, dtype=np.float64),\
            np.array(new_y, dtype=np.float64),\
            np.array(new_x_val, dtype=np.float64),\
@@ -125,9 +157,10 @@ def cross_val(x_b, y, k):
         new_x, new_y, new_x_val, new_y_true = create_new_sets(x_parts, y_parts, i)
         theta = ridge_regression(new_x, new_y)
         y_predicted = predict(new_x_val, theta)
-        print("\nPredicted - True\n")
-        for _ in range(len(y_predicted)):
-            print(f"P: {y_predicted[_]} -- T: {new_y_true[_]}\t Diff: {y_predicted[_] - new_y_true[_]}")
+        # print("\nPredicted - True\n")
+        # for _ in range(len(y_predicted)):
+        #     print(f"P: {y_predicted[_]} -- T: {new_y_true[_]}\t Diff: {y_predicted[_] - new_y_true[_]}")
+        # wait = input()
         # print("\n\nTRUE\n\n")
         # print(new_y_true)
         err = calculate_rmse(y_predicted, new_y_true)
@@ -150,8 +183,7 @@ def main(train_path, test_path):
     x_b = np.c_[np.ones((x.shape[0], 1)), x]
 
     best_theta = cross_val(x_b, y, 10)
-    print(f"BEST THETA: {best_theta}")
-    #
+
     # x_test, y_true = load_train_set(test_path)
 
     # y_predicted = predict(x, theta)
