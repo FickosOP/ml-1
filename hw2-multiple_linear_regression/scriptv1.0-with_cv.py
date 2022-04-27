@@ -18,9 +18,6 @@ def load_train_set(path):
     df['pol_bin'] = df['pol'].replace(['Female', 'Male'], [0, 1])
     df['oblast_bin'] = df['oblast'].replace(['A', 'B'], [0, 1])
 
-    # encoder = TargetEncoder()
-    # df[['pol_te', 'oblast_te', 'zvanje_te']] = encoder.fit_transform(df[['pol', 'oblast', 'zvanje']], df['y_sqrt'])
-
     stats = df['y_sqrt'].groupby(df['zvanje']).agg(['count', 'mean'])
     smoothing_factor = 1.0
     min_samples_leaf = 1
@@ -56,12 +53,13 @@ def load_train_set(path):
     # print(df)
     x = df.iloc[:, 7:].values
     y = df.iloc[:, 6].values
+    # print(df)
     # print(f"NAKON BRISANJA AUTLAJERA OSTALO JE: {len(df)}")
 
     # print(df.agg(['skew', 'kurtosis']).transpose())
     # print(df)
     # wait = input()
-    return np.array(x, dtype=np.float64), np.array(y, dtype=np.float64)
+    return np.array(x, dtype=np.float64), np.array(y, dtype=np.float64), encoded
 
 
 def detect_outliers(df):
@@ -82,8 +80,24 @@ def detect_outliers(df):
     return arr
 
 
-def load_test_set(path):
-    return 0
+def load_test_set(path, encoded):
+    df = pd.read_csv(path, sep=",", index_col=False)
+
+    df['pol_bin'] = df['pol'].replace(['Female', 'Male'], [0, 1])
+    df['oblast_bin'] = df['oblast'].replace(['A', 'B'], [0, 1])
+
+    df['zvanje_te'] = df['zvanje'].replace(['AssocProf', 'AsstProf', 'Prof'], encoded)
+
+    df['zvanje_z'] = zscore(df['zvanje_te'])
+    df = df.drop(['zvanje_te'], axis=1)
+
+    df['godina_doktor_z'] = zscore(df['godina_doktor'])
+    df['godina_iskustva_z'] = zscore(df['godina_iskustva'])
+
+    x = df.iloc[:, 6:].values
+    y = df.iloc[:, 5].values
+
+    return np.array(x, dtype=np.float64), np.array(y, dtype=np.float64)
 
 
 def h(x, theta, b):
@@ -178,18 +192,22 @@ def cross_val(x_b, y, k):
 
 
 def main(train_path, test_path):
-    x, y = load_train_set(train_path)
+    x, y, encoded = load_train_set(train_path)
 
     x_b = np.c_[np.ones((x.shape[0], 1)), x]
 
     best_theta = cross_val(x_b, y, 10)
+    print(best_theta)
+    print(f"Formula\nf = {best_theta[0]} + {best_theta[1]} * pol + {best_theta[2]} * oblast + {best_theta[3]} * zvanje"
+          f" + {best_theta[4]} * god_doktor + {best_theta[5]} * god_iskustva")
 
-    # x_test, y_true = load_train_set(test_path)
+    x_test, y_true = load_test_set(test_path, encoded)
+    x_test_b = np.c_[np.ones((x_test.shape[0], 1)), x_test]
+    y_predicted = predict(x_test_b, best_theta)
+    print(y_predicted, y_true)
+    error = calculate_rmse(y_predicted, y_true)
 
-    # y_predicted = predict(x, theta)
-    # error = calculate_rmse(y_predicted, y)
-    #
-    # print(f"RMSE:{error}")
+    print(f"RMSE:{error}")
 
 
 if __name__ == '__main__':
